@@ -12,6 +12,7 @@
 #include <poll.h>
 #include "buffer/buffer.h"
 #include "utils.h"
+#include <string.h>
 
 
 #define PORT_FREESCORD 4321
