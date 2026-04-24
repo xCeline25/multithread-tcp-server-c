@@ -49,7 +49,7 @@ int main(int argc, char *argv[])
 	while(1){
 		//accepter les demandes de connexion 
 		struct user *u= user_accept(listen_sock);
-		if (u!=NULL) continue;
+		if (u==NULL) continue;
 		list_add(users,u);		
 
 		//lire les octets envoye par le client et lui renvoyer 
