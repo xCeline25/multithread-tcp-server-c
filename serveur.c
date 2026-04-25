@@ -29,6 +29,8 @@ void *repeter(void *arg);
 int tube[2];//0 lecture //1 ecriture
 struct list *users;
 
+
+
 int main(int argc, char *argv[])
 {
 	
@@ -66,12 +68,15 @@ int main(int argc, char *argv[])
 void *handle_client(void *clt)
 { 
 	char buf[1024];
+	
 	struct user *u =(struct user*) clt;
 	if (u==NULL) return NULL;
 	ssize_t n;
-		while((n=read(u->sock,buf,sizeof(buf)))>0){ //lire ce que le client envoie socket reseau 
-			write(tube[1],buf,n);//envoyer ceci dans un tube avant u->sock on envoie au client
-		}
+			while((n=read(u->sock,buf,sizeof(buf)))>0){ //lire ce que le client envoie socket reseau 
+				if (n<0) close(u->sock);
+				write(tube[1],buf,n);//envoyer ceci dans un tube la version d'avant u->sock on envoie au client
+			}
+		
 	user_free(u);
 	return NULL;	
 

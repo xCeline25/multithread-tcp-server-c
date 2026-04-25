@@ -39,18 +39,37 @@ int main(int argc, char *argv[])
 		return -1;
 	}
 	char buf[1024];
+	struct pollfd fds[2]={
+						 {.fd=0, .events=POLLIN},//terminal de lecture
+					     {.fd=sock, .events=POLLIN}//socket de lecture
+						};
 
 	while(1){
-		//lire une ligne avec fgets on peut faire aussi read mais faut regler la gestion du \n
-		if(fgets(buf,sizeof(buf),stdin)==NULL) break;
-		//envoi avec write prcq on est sur TCP et la connection est deja etablie 
-		write(sock,buf,strlen(buf)); 
-		//lire la reponse avec read
-		ssize_t n=read(sock,buf,sizeof(buf)-1);
-		if (n<0) break;
-		buf[n]='\0';
-		//ecrire sur terminal discripteur 1 
-		write (1,buf,n);
+		ssize_t n;
+		if (poll(fds,2,-1)<0){
+			perror("poll");
+			break;
+		}
+		
+		//terminal
+		if(fds[0].revents & POLLIN){
+			//lire sur le terminal 
+			n=read(0,buf,sizeof(buf));
+			if(n==0) break;
+			//envoi avec write prcq on est sur TCP et la connection est deja etablie 
+			write(sock,buf,n); 
+		}
+
+		//socket
+		if(fds[1].revents & (POLLIN|POLLHUP)){
+			//lire la reponse avec read
+			 n=read(sock,buf,sizeof(buf));
+			if (n<0) break;
+			//ecrire sur terminal discripteur 1 
+			write (1,buf,n);
+		}
+		
+		
 
 	}
 	close(sock);
@@ -85,5 +104,5 @@ int connect_serveur_tcp(char *adresse, uint16_t port)
 void usage(char *nom_prog){
 	fprintf(stderr,"Usage:%s addr_ipv4\n"
 			"client pour\n"
-			"Exemple:%s 208.97.177.124",nom_prog,nom_prog);
+			"Exemple:%s 208.97.177.124 \n",nom_prog,nom_prog);
 }
