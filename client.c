@@ -38,7 +38,12 @@ int main(int argc, char *argv[])
 		perror("connect");
 		return -1;
 	}
-	char buf[1024];
+	
+	buffer *b = buff_create(sock, 1024); //  mémoire interne TCP pour reconstruire lignes
+
+	char buf[1024];// input utilisateur (écriture vers serveur)
+	char line[1024];// input serveur (lecture depuis socket)
+
 	struct pollfd fds[2]={
 						 {.fd=0, .events=POLLIN},//terminal de lecture
 					     {.fd=sock, .events=POLLIN}//socket de lecture
@@ -46,32 +51,55 @@ int main(int argc, char *argv[])
 
 	while(1){
 		ssize_t n;
+		// on traite le buffer (socket ) avant poll pour eviter de faire un poll inutile
+		// si le buffer a deja des octets a lire
+		//on vide le buffer  avant d’attendre poll 
+		if (buff_ready(b)) { 
+			//lire une ligne du buffer et l’écrire sur le terminal
+			if (buff_fgets_crlf(b, line, sizeof(line)) != NULL) {
+				//changer les CRLF en LF 
+				  crlf_to_lf(line);
+				  write(1, line, strlen(line)); //on ecrit sur le terminal donc on consomme le buffer avant de faire un poll
+				   continue;
+				 }
+		 
+		}
 		if (poll(fds,2,-1)<0){
 			perror("poll");
-			break;
+			break; 
 		}
 		
-		//terminal
+		//terminal pret oui /non
 		if(fds[0].revents & POLLIN){
 			//lire sur le terminal 
 			n=read(0,buf,sizeof(buf));
-			if(n==0) break;
+			 if (n < 0) {
+				perror("read");
+				break;
+			}
+			if(n==0) break;//non
 			//envoi avec write prcq on est sur TCP et la connection est deja etablie 
-			write(sock,buf,n); 
+			buf[n]='\0';//pour avoir une chaine de caractere et utiliser strlen 
+			lf_to_crlf(buf);
+			write(sock,buf,strlen(buf)); //strlen pas n prcq ca change la taille CRLF ajoute le  caractère \r
 		}
 
-		//socket
+		//socket pret oui/non
 		if(fds[1].revents & (POLLIN|POLLHUP)){
 			//lire la reponse avec read
-			 n=read(sock,buf,sizeof(buf));
-			if (n<0) break;
-			//ecrire sur terminal discripteur 1 
-			write (1,buf,n);
+			if (buff_fgets_crlf(b, line, sizeof(line)) == NULL) {
+				//non
+				break;
+			}
+			//ecrire sur terminal discripteur 1
+			crlf_to_lf(line); 
+			write (1,line,strlen(line));
 		}
 		
 		
 
 	}
+	 buff_free(b);
 	close(sock);
 	return 0;
 }
