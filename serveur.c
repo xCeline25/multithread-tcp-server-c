@@ -49,6 +49,7 @@ int main(int argc, char *argv[])
 	char message_bienvenue[] =
 		"Bienvenue sur freescord\r\n"
 		"Entrez votre pseudo avec: nickname <pseudo>\r\n"
+		"Ensuite, envoyez vos messages avec: msg <texte>\r\n"
 		"Pseudo max 16 caracteres, sans ':'\r\n"
 		"\r\n";
 
@@ -146,7 +147,28 @@ void *handle_client(void *clt)
 			}
 			
 			while (buff_fgets_crlf(b, buf, sizeof(buf)) != NULL){
-				snprintf(msg, sizeof(msg), "%s: %s", u->nickname, buf);
+				size_t len = strlen(buf);
+				while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\r')) {
+					buf[len - 1] = '\0';
+					len--;
+				}
+
+				if (strncmp(buf, "msg ", 4) != 0) {
+					write(u->sock,
+						"ERR commande inconnue, utilisez: msg <texte>\r\n",
+						strlen("ERR commande inconnue, utilisez: msg <texte>\r\n"));
+					continue;
+				}
+
+				const char *contenu = buf + 4;
+				if (*contenu == '\0') {
+					write(u->sock,
+						"ERR message vide\r\n",
+						strlen("ERR message vide\r\n"));
+					continue;
+				}
+
+				snprintf(msg, sizeof(msg), "%s: %s\r\n", u->nickname, contenu);
 				write(tube[1],msg,strlen(msg));
 			}
 
@@ -159,17 +181,51 @@ void *handle_client(void *clt)
 
 int create_listening_sock(uint16_t port)
 {
-	char service[6]; //// Buffer pour stocker le port
+	char service[6];
 	struct addrinfo hints;
 	struct addrinfo *res = NULL;
 	struct addrinfo *rp;
 	int sock = -1;
 
-	snprintf(service, sizeof(service), "%u", (unsigned int)port);// Convertit le port (entier) en chaîne de caractères
+	snprintf(service, sizeof(service), "%u", (unsigned int)port);
+
+	//on essaie d'abord de créer une socket IPv6,
+	// qui peut aussi accepter des connexions IPv4 
+	//si le noyau le supporte
 	memset(&hints, 0, sizeof(hints));
-	hints.ai_family = AF_UNSPEC; //ipv4 ou ipv6
+	hints.ai_family = AF_INET6;
 	hints.ai_socktype = SOCK_STREAM;
-	hints.ai_flags = AI_PASSIVE; // Mode serveur (équivalent de INADDR_ANY)
+	hints.ai_flags = AI_PASSIVE;
+
+	if (getaddrinfo(NULL, service, &hints, &res) == 0) {
+		for (rp = res; rp != NULL; rp = rp->ai_next) {
+			sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+			if (sock < 0)
+				continue;
+
+			int yes = 1;
+			setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+
+			int off = 0;
+			setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY, &off, sizeof(off));
+
+			if (bind(sock, rp->ai_addr, rp->ai_addrlen) == 0 && listen(sock, 10) == 0)
+				break;
+
+			close(sock);
+			sock = -1;
+		}
+		freeaddrinfo(res);
+		if (sock >= 0)
+			return sock;
+	}
+
+	//si la création d'une socket IPv6 a echoue 
+	//on essaie de creer une socket IPv4
+	memset(&hints, 0, sizeof(hints));
+	hints.ai_family = AF_INET;
+	hints.ai_socktype = SOCK_STREAM;
+	hints.ai_flags = AI_PASSIVE;
 
 	if (getaddrinfo(NULL, service, &hints, &res) != 0) {
 		perror("getaddrinfo");
@@ -182,19 +238,10 @@ int create_listening_sock(uint16_t port)
 			continue;
 
 		int yes = 1;
-		 // evite Address already in use
 		setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
 
-		if (rp->ai_family == AF_INET6) {
-			int off = 0;
-			setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY, &off, sizeof(off));
-		}
-
-		if (bind(sock, rp->ai_addr, rp->ai_addrlen) == 0) {
-			if (listen(sock, 10) == 0)
-				break;
-			perror("listen");
-		}
+		if (bind(sock, rp->ai_addr, rp->ai_addrlen) == 0 && listen(sock, 10) == 0)
+			break;
 
 		close(sock);
 		sock = -1;
@@ -203,7 +250,7 @@ int create_listening_sock(uint16_t port)
 	freeaddrinfo(res);
 
 	if (sock < 0)
-		perror("bind");
+		perror("bind/listen");
 
 	return sock;
 
@@ -216,7 +263,7 @@ void *repeter(void *arg)
 
   while ((n=read(tube[0],buf,sizeof(buf)))>0){
 	pthread_mutex_lock(&lock);
-	struct node *c =users->first;//list_get(users,0);marche pas
+	struct node *c =users->first;
 	while(c!=NULL){
 		struct user *u = (struct user* )c->elt;//on recupere le client 
 		if (u && u->sock >=0){

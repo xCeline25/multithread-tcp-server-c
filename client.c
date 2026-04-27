@@ -7,6 +7,7 @@
 #include <fcntl.h>
 #include <pthread.h>
 #include <arpa/inet.h>
+#include <netdb.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <poll.h>
@@ -21,7 +22,7 @@
  * chaîne de caractère et au port donné en argument
  * retourne le descripteur de fichier de la socket obtenue ou -1 en cas
  * d'erreur. */
-int connect_serveur_tcp(char *adresse, uint16_t port);
+int connect_serveur_tcp(const char *adresse, uint16_t port);
 
 void usage(char* nom_prog);
 
@@ -81,6 +82,7 @@ int main(int argc, char *argv[])
 			//envoi avec write prcq on est sur TCP et la connection est deja etablie 
 			buf[n]='\0';//pour avoir une chaine de caractere et utiliser strlen 
 			lf_to_crlf(buf);
+			
 			write(sock,buf,strlen(buf)); //strlen pas n prcq ca change la taille CRLF ajoute le  caractère \r
 		}
 
@@ -104,33 +106,45 @@ int main(int argc, char *argv[])
 	return 0;
 }
 
-int connect_serveur_tcp(char *adresse, uint16_t port)
+int connect_serveur_tcp(const char *adresse, uint16_t port)
 {
-	int sock=socket(AF_INET,SOCK_STREAM,0);
-	if (sock<0){
-		perror("socket");
-		return -1;
-	}
-	struct sockaddr_in sa ={
-		.sin_family=AF_INET,
-		.sin_port=htons(port)
-	};
+	char service[6];
+	struct addrinfo hints;
+	struct addrinfo *res = NULL;
+	struct addrinfo *ai = NULL;
+	int sock = -1;
 
-	if ((inet_pton(AF_INET,adresse,&sa.sin_addr)!=1)){
-		fprintf(stderr,"adresse ipv4 non valable");
+	snprintf(service, sizeof(service), "%u", (unsigned int)port);
+	memset(&hints, 0, sizeof(hints));
+	hints.ai_family = AF_UNSPEC;
+	hints.ai_socktype = SOCK_STREAM;
+
+	int gai_ret = getaddrinfo(adresse, service, &hints, &res);
+	if (gai_ret != 0) {
+		fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(gai_ret));
 		return -1;
 	}
-	socklen_t sl =sizeof(struct sockaddr_in);
-	if(connect(sock,(struct sockaddr *)&sa, sl)<0){
-		perror("connect");
-		return -1;
+
+	for (ai = res; ai != NULL; ai = ai->ai_next) {
+		sock = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+		if (sock < 0) {
+			continue;
+		}
+		if (connect(sock, ai->ai_addr, ai->ai_addrlen) == 0) {
+			break;
+		}
+		close(sock);
+		sock = -1;
 	}
-	/* pour éviter les warnings de variable non utilisée */
-	return sock; //*adresse + port; //changement ici 
+
+	freeaddrinfo(res);
+	return sock;
 }
 
 void usage(char *nom_prog){
-	fprintf(stderr,"Usage:%s addr_ipv4\n"
+	fprintf(stderr,"Usage:%s hote\n"
 			"client pour\n"
-			"Exemple:%s 208.97.177.124 \n",nom_prog,nom_prog);
+			"Exemple:%s 127.0.0.1\n"
+			"Exemple:%s ::1\n"
+			"Exemple:%s localhost\n",nom_prog,nom_prog,nom_prog,nom_prog);
 }
