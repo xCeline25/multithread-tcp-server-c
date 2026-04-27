@@ -8,7 +8,8 @@
 #include <fcntl.h>
 #include <pthread.h>
 #include <arpa/inet.h>
-#include <signal.h>
+#include <netdb.h>
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -39,12 +40,11 @@ pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;//pour proteger la liste des cl
 
 int main(int argc, char *argv[])
 {
-	(void)argc;
-	(void)argv;
+
 
 	int listen_sock=create_listening_sock(PORT_FREESCORD);
 	if (listen_sock <0) exit(1);
-	signal(SIGPIPE, SIG_IGN);
+	
 	
 	char message_bienvenue[] =
 		"Bienvenue sur freescord\r\n"
@@ -159,27 +159,52 @@ void *handle_client(void *clt)
 
 int create_listening_sock(uint16_t port)
 {
+	char service[6]; //// Buffer pour stocker le port
+	struct addrinfo hints;
+	struct addrinfo *res = NULL;
+	struct addrinfo *rp;
+	int sock = -1;
 
-	int sock=socket(AF_INET,SOCK_STREAM,0);
-	if (sock<0){
-		perror("socket");
+	snprintf(service, sizeof(service), "%u", (unsigned int)port);// Convertit le port (entier) en chaîne de caractères
+	memset(&hints, 0, sizeof(hints));
+	hints.ai_family = AF_UNSPEC; //ipv4 ou ipv6
+	hints.ai_socktype = SOCK_STREAM;
+	hints.ai_flags = AI_PASSIVE; // Mode serveur (équivalent de INADDR_ANY)
+
+	if (getaddrinfo(NULL, service, &hints, &res) != 0) {
+		perror("getaddrinfo");
 		return -1;
 	}
-	struct sockaddr_in sa ={.sin_family= AF_INET,
-							.sin_port=htons(port),
-							.sin_addr.s_addr =htonl(INADDR_ANY)
-						};
-	
-	if (bind(sock,(struct sockaddr*)&sa,sizeof(sa))<0){
+
+	for (rp = res; rp != NULL; rp = rp->ai_next) {
+		sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+		if (sock < 0)
+			continue;
+
+		int yes = 1;
+		 // evite Address already in use
+		setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+
+		if (rp->ai_family == AF_INET6) {
+			int off = 0;
+			setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY, &off, sizeof(off));
+		}
+
+		if (bind(sock, rp->ai_addr, rp->ai_addrlen) == 0) {
+			if (listen(sock, 10) == 0)
+				break;
+			perror("listen");
+		}
+
+		close(sock);
+		sock = -1;
+	}
+
+	freeaddrinfo(res);
+
+	if (sock < 0)
 		perror("bind");
-		return -1;
-	}
-	if (listen(sock,10)<0){
-		perror("listen");
-		return -1;
-	}
-	
-	
+
 	return sock;
 
 }
