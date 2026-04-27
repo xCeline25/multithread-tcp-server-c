@@ -17,12 +17,20 @@ struct user *user_accept(int sl)
 {
 	struct user *u=malloc (sizeof(struct user));
 	if (u==NULL) return NULL;
-	 u->addr_len= sizeof( struct sockaddr_in);
-	 u->sock= accept(sl,(struct sockaddr*)&u->address,&u->addr_len);
+	u->address = malloc(sizeof(struct sockaddr_storage));
+	if (u->address == NULL) {
+		free(u);
+		return NULL;
+	}
+	u->addr_len= sizeof(struct sockaddr_storage);
+	u->sock= accept(sl, u->address, &u->addr_len);
 		if (u->sock<0){
 			perror("accept");
-           return NULL;
+			free(u->address);
+			free(u);
+			return NULL;
 		}
+	u->nickname[0] = '\0';
 	
 	return u;
 }
@@ -32,6 +40,7 @@ void user_free(struct user *user)
 {
 	if(user ==NULL) return;
 	close(user->sock);
+	free(user->address);
 	free(user);
 	
 }

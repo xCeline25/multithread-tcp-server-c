@@ -12,6 +12,7 @@ struct user {
 	struct sockaddr *address;
 	socklen_t addr_len;
 	int sock;
+	char nickname[17]; /* pseudonyme de l'utilisateur, 16 caractères + caractère nul */
 	/* autres champs éventuels */
 };
 

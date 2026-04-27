@@ -6,7 +6,7 @@ TEST = list/test_list
 
 all: $(EXE)
 
-srv: serveur.o list/list.o user.o
+srv: serveur.o list/list.o user.o  buffer/buffer.o utils.o
 	$(CC) $(LDFLAGS) $^ -o $@
 
 clt: client.o buffer/buffer.o utils.o
