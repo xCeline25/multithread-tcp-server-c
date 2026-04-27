@@ -31,6 +31,8 @@ int create_listening_sock(uint16_t port);
 void *repeter(void *arg);
 int nickname_exists(const char *nick);
 void remove_user_from_list(struct user *u);
+struct user *find_user_by_nickname_locked(const char *nick);
+void send_user_list(struct user *dest);
 
 int tube[2];//0 lecture //1 ecriture
 struct list *users;
@@ -50,6 +52,7 @@ int main(int argc, char *argv[])
 		"Bienvenue sur freescord\r\n"
 		"Entrez votre pseudo avec: nickname <pseudo>\r\n"
 		"Ensuite, envoyez vos messages avec: msg <texte>\r\n"
+		"Commandes: list | whisper <pseudo> <texte>\r\n"
 		"Pseudo max 16 caracteres, sans ':'\r\n"
 		"\r\n";
 
@@ -153,6 +156,58 @@ void *handle_client(void *clt)
 					len--;
 				}
 
+				if (strcmp(buf, "list") == 0) {
+					send_user_list(u);
+					continue;
+				}
+
+				if (strncmp(buf, "whisper ", 8) == 0) {
+					char *args = buf + 8;
+					char *sep = strchr(args, ' ');
+					if (sep == NULL || sep == args || *(sep + 1) == '\0') {
+						write(u->sock,
+							"ERR usage: whisper <pseudo> <texte>\r\n",
+							strlen("ERR usage: whisper <pseudo> <texte>\r\n"));
+						continue;
+					}
+
+					*sep = '\0';
+					char *dest_nick = args;
+					char *contenu = sep + 1;
+
+					if (strlen(dest_nick) > 16 || strchr(dest_nick, ':') != NULL) {
+						write(u->sock,
+							"ERR pseudo destinataire invalide\r\n",
+							strlen("ERR pseudo destinataire invalide\r\n"));
+						continue;
+					}
+
+					if (*contenu == '\0') {
+						write(u->sock,
+							"ERR message prive vide\r\n",
+							strlen("ERR message prive vide\r\n"));
+						continue;
+					}
+
+					pthread_mutex_lock(&lock);
+					struct user *dest = find_user_by_nickname_locked(dest_nick);
+					if (dest == NULL) {
+						pthread_mutex_unlock(&lock);
+						write(u->sock,
+							"ERR utilisateur introuvable\r\n",
+							strlen("ERR utilisateur introuvable\r\n"));
+						continue;
+					}
+
+					snprintf(msg, sizeof(msg), "priv %s: %s\r\n", u->nickname, contenu);
+					write(dest->sock, msg, strlen(msg));
+
+					snprintf(msg, sizeof(msg), "priv_to %s: %s\r\n", dest_nick, contenu);
+					write(u->sock, msg, strlen(msg));
+					pthread_mutex_unlock(&lock);
+					continue;
+				}
+
 				if (strncmp(buf, "msg ", 4) != 0) {
 					write(u->sock,
 						"ERR commande inconnue, utilisez: msg <texte>\r\n",
@@ -168,7 +223,7 @@ void *handle_client(void *clt)
 					continue;
 				}
 
-				snprintf(msg, sizeof(msg), "%s: %s\r\n", u->nickname, contenu);
+				snprintf(msg, sizeof(msg), "msg %s: %s\r\n", u->nickname, contenu);
 				write(tube[1],msg,strlen(msg));
 			}
 
@@ -299,4 +354,32 @@ void remove_user_from_list(struct user *u)
 	pthread_mutex_lock(&lock);
 	list_remove_element(users, u);
 	pthread_mutex_unlock(&lock);
+}
+
+struct user *find_user_by_nickname_locked(const char *nick)
+{
+	for (struct node *c = users->first; c != NULL; c = c->next) {
+		struct user *u = (struct user *)c->elt;
+		if (u != NULL && strcmp(u->nickname, nick) == 0)
+			return u;
+	}
+	return NULL;
+}
+
+void send_user_list(struct user *dest)
+{
+	write(dest->sock, "list_begin\r\n", strlen("list_begin\r\n"));
+
+	pthread_mutex_lock(&lock);
+	for (struct node *c = users->first; c != NULL; c = c->next) {
+		struct user *u = (struct user *)c->elt;
+		if (u == NULL)
+			continue;
+		char line[64];
+		snprintf(line, sizeof(line), "list %s\r\n", u->nickname);
+		write(dest->sock, line, strlen(line));
+	}
+	pthread_mutex_unlock(&lock);
+
+	write(dest->sock, "list_end\r\n", strlen("list_end\r\n"));
 }
