@@ -16,10 +16,10 @@ Freescord est une application réseau en C basée sur TCP permettant :
 Le projet repose sur une architecture client/serveur multithread.
 
 # Fonctionnalités
-##Chat
+## Chat
 `msg <texte>` : envoi d’un message à tous les utilisateurs connectés
 `whisper <pseudo> <texte>` : envoi d’un message privé à un utilisateur
-##Utilisateurs
+## Utilisateurs
 `nickname <pseudo>` : définir son pseudonyme (obligatoire à la connexion)
 `list` : afficher la liste des utilisateurs connectés
 
@@ -41,28 +41,28 @@ Affiche les fichiers présents dans le dossier files du serveur.
 # Architecture
 ## Client
 utilise poll() pour gérer simultanément :
--entrée clavier
--socket réseau
--gère les commandes utilisateur
--utilise une socket secondaire pour les transferts de fichiers
+-entrée clavier<br/>
+-socket réseau<br/>
+-gère les commandes utilisateur<br/>
+-utilise une socket secondaire pour les transferts de fichiers<br/>
 ## Serveur
 -gestion multi-clients via threads (pthread)
 synchronisation avec mutex pour la liste des utilisateurs
 diffusion des messages via un pipe
 gestion des commandes et des transferts de fichiers
-Système de transfert de fichiers
+Système de transfert de fichiers<br/>
 
-Le transfert de fichiers utilise des sockets dynamiques :
+Le transfert de fichiers utilise des sockets dynamiques :<br/>
 
-Le serveur crée une socket avec bind(port 0)
+Le serveur crée une socket avec bind(port 0)<br/>
 Le système attribue un port libre automatiquement
 Le serveur récupère ce port avec getsockname
-Le serveur envoie au client :
+Le serveur envoie au client :<br/>
 fput_ready <port> ou fget_ready <port>
 Le client se connecte à ce port
 Les données sont transférées via cette connexion dédiée
 
-Cela permet de séparer :
+Cela permet de séparer :<br/>
 
 le canal de chat principal
 les transferts de fichiers
@@ -72,7 +72,7 @@ make
 
 # ou manuellement :
 
-`gcc -Wall -Wvla -std=c99 -pthread client.c -o clt`
+`gcc -Wall -Wvla -std=c99 -pthread client.c -o clt`<br/>
 `gcc -Wall -Wvla -std=c99 -pthread serveur.c -o srv`
 
 # Exécution
