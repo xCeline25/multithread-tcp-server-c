@@ -13,12 +13,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <errno.h>
 #include "list/list.h"
 #include "user.h"
 #include "buffer/buffer.h"
 #include "utils.h"
 
 #define PORT_FREESCORD 4321
+#define FILES_DIR "files"
 
 /** Gérer toutes les communications avec le client renseigné dans
  * user, qui doit être l'adresse d'une struct user */
@@ -33,6 +37,14 @@ int nickname_exists(const char *nick);
 void remove_user_from_list(struct user *u);
 struct user *find_user_by_nickname_locked(const char *nick);
 void send_user_list(struct user *dest);
+int create_dynamic_transfer_sock(void);
+void *handle_file_transfer_send(void *arg);
+void *handle_file_transfer_receive(void *arg);
+
+struct transfer_context {
+	int transfer_sock;
+	char filepath[512];
+};
 
 int tube[2];//0 lecture //1 ecriture
 struct list *users;
@@ -53,8 +65,13 @@ int main(int argc, char *argv[])
 		"Entrez votre pseudo avec: nickname <pseudo>\r\n"
 		"Ensuite, envoyez vos messages avec: msg <texte>\r\n"
 		"Commandes: list | whisper <pseudo> <texte>\r\n"
+		"Fichiers: flist | fget <file> | fput <file>\r\n"
 		"Pseudo max 16 caracteres, sans ':'\r\n"
 		"\r\n";
+
+	if (mkdir(FILES_DIR, 0755) < 0 && errno != EEXIST) {
+		perror("mkdir");
+	}
 
 	if(pipe(tube)<0){
 		perror("pipe");
@@ -158,6 +175,147 @@ void *handle_client(void *clt)
 
 				if (strcmp(buf, "list") == 0) {
 					send_user_list(u);
+					continue;
+				}
+
+				if (strcmp(buf, "flist") == 0) {
+					DIR *dir = opendir(FILES_DIR);
+					if (dir == NULL) {
+						write(u->sock,
+							"flist_error opendir failed\r\n",
+							strlen("flist_error opendir failed\r\n"));
+						continue;
+					}
+
+					write(u->sock, "flist_begin\r\n", strlen("flist_begin\r\n"));
+
+					struct dirent *entry;
+					while ((entry = readdir(dir)) != NULL) {
+						char path[512];
+						struct stat st;
+
+						snprintf(path, sizeof(path), "%s/%s", FILES_DIR, entry->d_name);
+						if (stat(path, &st) == 0 && S_ISREG(st.st_mode)) {
+							char line[256];
+							snprintf(line, sizeof(line), "flist %s\r\n", entry->d_name);
+							write(u->sock, line, strlen(line));
+						}
+					}
+
+					write(u->sock, "flist_end\r\n", strlen("flist_end\r\n"));
+					closedir(dir);
+					continue;
+				}
+
+				if (strncmp(buf, "fget ", 5) == 0) {
+					char *filename = buf + 5;
+					if (*filename == '\0') {
+						write(u->sock,
+							"ERR usage: fget <filename>\r\n",
+							strlen("ERR usage: fget <filename>\r\n"));
+						continue;
+					}
+
+					if (strchr(filename, '/') != NULL || strchr(filename, '\\') != NULL) {
+						write(u->sock,
+							"ERR chemin interdit\r\n",
+							strlen("ERR chemin interdit\r\n"));
+						continue;
+					}
+
+					int transfer_sock = create_dynamic_transfer_sock();
+					if (transfer_sock < 0) {
+						write(u->sock,
+							"ERR socket transfer failed\r\n",
+							strlen("ERR socket transfer failed\r\n"));
+						continue;
+					}
+
+					struct sockaddr_storage addr;
+					socklen_t addr_len = sizeof(addr);
+					if (getsockname(transfer_sock, (struct sockaddr *)&addr, &addr_len) < 0) {
+						perror("getsockname");
+						close(transfer_sock);
+						continue;
+					}
+
+					uint16_t port = 0;
+					if (addr.ss_family == AF_INET6)
+						port = ntohs(((struct sockaddr_in6 *)&addr)->sin6_port);
+					else if (addr.ss_family == AF_INET)
+						port = ntohs(((struct sockaddr_in *)&addr)->sin_port);
+
+					char resp[64];
+					snprintf(resp, sizeof(resp), "fget_ready %u\r\n", (unsigned int)port);
+					write(u->sock, resp, strlen(resp));
+
+					struct transfer_context *ctx = malloc(sizeof(struct transfer_context));
+					if (ctx == NULL) {
+						close(transfer_sock);
+						continue;
+					}
+					ctx->transfer_sock = transfer_sock;
+					snprintf(ctx->filepath, sizeof(ctx->filepath), "%s/%s", FILES_DIR, filename);
+
+					pthread_t tid;
+					pthread_create(&tid, NULL, handle_file_transfer_send, (void *)ctx);
+					pthread_detach(tid);
+					continue;
+				}
+
+				if (strncmp(buf, "fput ", 5) == 0) {
+					char *filename = buf + 5;
+					if (*filename == '\0') {
+						write(u->sock,
+							"ERR usage: fput <filename>\r\n",
+							strlen("ERR usage: fput <filename>\r\n"));
+						continue;
+					}
+
+					if (strchr(filename, '/') != NULL || strchr(filename, '\\') != NULL) {
+						write(u->sock,
+							"ERR chemin interdit\r\n",
+							strlen("ERR chemin interdit\r\n"));
+						continue;
+					}
+
+					int transfer_sock = create_dynamic_transfer_sock();
+					if (transfer_sock < 0) {
+						write(u->sock,
+							"ERR socket transfer failed\r\n",
+							strlen("ERR socket transfer failed\r\n"));
+						continue;
+					}
+
+					struct sockaddr_storage addr;
+					socklen_t addr_len = sizeof(addr);
+					if (getsockname(transfer_sock, (struct sockaddr *)&addr, &addr_len) < 0) {
+						perror("getsockname");
+						close(transfer_sock);
+						continue;
+					}
+
+					uint16_t port = 0;
+					if (addr.ss_family == AF_INET6)
+						port = ntohs(((struct sockaddr_in6 *)&addr)->sin6_port);
+					else if (addr.ss_family == AF_INET)
+						port = ntohs(((struct sockaddr_in *)&addr)->sin_port);
+
+					char resp[64];
+					snprintf(resp, sizeof(resp), "fput_ready %u\r\n", (unsigned int)port);
+					write(u->sock, resp, strlen(resp));
+
+					struct transfer_context *ctx = malloc(sizeof(struct transfer_context));
+					if (ctx == NULL) {
+						close(transfer_sock);
+						continue;
+					}
+					ctx->transfer_sock = transfer_sock;
+					snprintf(ctx->filepath, sizeof(ctx->filepath), "%s/%s", FILES_DIR, filename);
+
+					pthread_t tid;
+					pthread_create(&tid, NULL, handle_file_transfer_receive, (void *)ctx);
+					pthread_detach(tid);
 					continue;
 				}
 
@@ -382,4 +540,195 @@ void send_user_list(struct user *dest)
 	pthread_mutex_unlock(&lock);
 
 	write(dest->sock, "list_end\r\n", strlen("list_end\r\n"));
+}
+
+int create_dynamic_transfer_sock(void)
+{
+	struct addrinfo hints;
+	struct addrinfo *res = NULL;
+	struct addrinfo *rp;
+	int sock = -1;
+
+	memset(&hints, 0, sizeof(hints));
+	hints.ai_family = AF_INET6;
+	hints.ai_socktype = SOCK_STREAM;
+	hints.ai_flags = AI_PASSIVE;
+
+	if (getaddrinfo(NULL, "0", &hints, &res) == 0) {
+		for (rp = res; rp != NULL; rp = rp->ai_next) {
+			sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+			if (sock < 0)
+				continue;
+
+			int yes = 1;
+			setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+
+			int off = 0;
+			setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY, &off, sizeof(off));
+
+			if (bind(sock, rp->ai_addr, rp->ai_addrlen) == 0 && listen(sock, 1) == 0)
+				break;
+
+			close(sock);
+			sock = -1;
+		}
+		freeaddrinfo(res);
+		if (sock >= 0)
+			return sock;
+	}
+
+	memset(&hints, 0, sizeof(hints));
+	hints.ai_family = AF_INET;
+	hints.ai_socktype = SOCK_STREAM;
+	hints.ai_flags = AI_PASSIVE;
+
+	if (getaddrinfo(NULL, "0", &hints, &res) != 0) {
+		perror("getaddrinfo port 0");
+		return -1;
+	}
+
+	for (rp = res; rp != NULL; rp = rp->ai_next) {
+		sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+		if (sock < 0)
+			continue;
+
+		int yes = 1;
+		setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+
+		if (bind(sock, rp->ai_addr, rp->ai_addrlen) == 0 && listen(sock, 1) == 0)
+			break;
+
+		close(sock);
+		sock = -1;
+	}
+
+	freeaddrinfo(res);
+	return sock;
+}
+
+void *handle_file_transfer_send(void *arg)
+{
+	struct transfer_context *ctx = (struct transfer_context *)arg;
+	if (ctx == NULL)
+		return NULL;
+
+	int listen_sock = ctx->transfer_sock;
+	const char *filepath = ctx->filepath;
+
+	struct sockaddr_storage client_addr;
+	socklen_t addr_len = sizeof(client_addr);
+	int client_sock = accept(listen_sock, (struct sockaddr *)&client_addr, &addr_len);
+
+	if (client_sock < 0) {
+		perror("accept transfer");
+		close(listen_sock);
+		free(ctx);
+		return NULL;
+	}
+
+	close(listen_sock);
+
+	FILE *f = fopen(filepath, "rb");
+	if (f == NULL) {
+		write(client_sock,
+			"ERR file not found\r\n",
+			strlen("ERR file not found\r\n"));
+		close(client_sock);
+		free(ctx);
+		return NULL;
+	}
+
+	fseek(f, 0, SEEK_END);
+	long file_size = ftell(f);
+	fseek(f, 0, SEEK_SET);
+
+	char header[64];
+	snprintf(header, sizeof(header), "fget_data %ld\r\n", file_size);
+	write(client_sock, header, strlen(header));
+
+	char buf[4096];
+	size_t n;
+	while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
+		write(client_sock, buf, n);
+	}
+
+	fclose(f);
+	close(client_sock);
+	free(ctx);
+	return NULL;
+}
+
+void *handle_file_transfer_receive(void *arg)
+{
+	struct transfer_context *ctx = (struct transfer_context *)arg;
+	if (ctx == NULL)
+		return NULL;
+
+	int listen_sock = ctx->transfer_sock;
+	const char *filepath = ctx->filepath;
+
+	struct sockaddr_storage client_addr;
+	socklen_t addr_len = sizeof(client_addr);
+	int client_sock = accept(listen_sock, (struct sockaddr *)&client_addr, &addr_len);
+	if (client_sock < 0) {
+		perror("accept transfer");
+		close(listen_sock);
+		free(ctx);
+		return NULL;
+	}
+
+	close(listen_sock);
+
+	buffer *b = buff_create(client_sock, 4096);
+	if (b == NULL) {
+		close(client_sock);
+		free(ctx);
+		return NULL;
+	}
+
+	char header[128];
+	if (buff_fgets_crlf(b, header, sizeof(header)) == NULL) {
+		buff_free(b);
+		close(client_sock);
+		free(ctx);
+		return NULL;
+	}
+
+	long expected = -1;
+	if (sscanf(header, "fput_data %ld", &expected) != 1 || expected < 0) {
+		write(client_sock, "ERR bad upload header\r\n", strlen("ERR bad upload header\r\n"));
+		buff_free(b);
+		close(client_sock);
+		free(ctx);
+		return NULL;
+	}
+
+	FILE *f = fopen(filepath, "wb");
+	if (f == NULL) {
+		write(client_sock, "ERR cannot open output\r\n", strlen("ERR cannot open output\r\n"));
+		buff_free(b);
+		close(client_sock);
+		free(ctx);
+		return NULL;
+	}
+
+	long remaining = expected;
+	while (remaining > 0) {
+		int c = buff_getc(b);
+		if (c == EOF)
+			break;
+		fputc(c, f);
+		remaining--;
+	}
+
+	fclose(f);
+	if (remaining == 0)
+		write(client_sock, "fput_ok\r\n", strlen("fput_ok\r\n"));
+	else
+		write(client_sock, "ERR incomplete upload\r\n", strlen("ERR incomplete upload\r\n"));
+
+	buff_free(b);
+	close(client_sock);
+	free(ctx);
+	return NULL;
 }
