@@ -196,7 +196,7 @@ void *handle_client(void *clt)
 
 						snprintf(path, sizeof(path), "%s/%s", FILES_DIR, entry->d_name);
 						if (stat(path, &st) == 0 && S_ISREG(st.st_mode)) {
-							char line[256];
+							char line[300];
 							snprintf(line, sizeof(line), "flist %s\r\n", entry->d_name);
 							write(u->sock, line, strlen(line));
 						}
